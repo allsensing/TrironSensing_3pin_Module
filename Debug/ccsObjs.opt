@@ -1,0 +1,13 @@
+"./TMP112x.obj"
+"./ads1115.obj"
+"./clock.obj"
+"./fram.obj"
+"./gpio.obj"
+"./i2c.obj"
+"./lmp91000.obj"
+"./main.obj"
+"./modbus_rtu.obj"
+"./uart.obj"
+"../lnk_msp430fr2155.cmd"
+-lfrwp_init.a
+-llibc.a

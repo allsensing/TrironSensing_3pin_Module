@@ -1,0 +1,52 @@
+[
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/ads1115.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/clock.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/gpio.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/i2c.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/lmp91000.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/main.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/uart.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/TMP112x.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/fram.c"
+   },
+   {
+      "directory" : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/Debug",
+      "command"   : "clang++ -I\"C:/ti/ccs2041/ccs/ccs_base/msp430/include\" -I\"C:/Users/bompj/workspace_ccstheia/MSP430FR2155\" -I\"C:/ti/ccs2041/ccs/tools/compiler/ti-cgt-msp430_21.6.1.LTS/include\" -D__MSP430FR2155__ -D_FRWP_ENABLE -D_INFO_FRWP_ENABLE -xc",
+      "file"      : "C:/Users/bompj/workspace_ccstheia/MSP430FR2155/modbus_rtu.c"
+   }
+]
