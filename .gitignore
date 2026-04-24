@@ -1,0 +1,16 @@
+﻿# CCS Build Output
+Debug/
+Release/
+
+# CCS IDE Settings
+.settings/
+targetConfigs/
+
+# CCS Project metadata (선택: 팀 공유 시 포함할 수도 있음)
+# .ccsproject
+# .cproject
+# .project
+
+# Windows
+Thumbs.db
+desktop.ini
