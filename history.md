@@ -259,3 +259,65 @@
 ## 수정 파일
 - `lmp91000.h` (`LMP_OK=0`, `LMP_ERR=1` 정의 추가)
 - `lmp91000.c` (반환값 규약 수정, TIACN/REFCN 실패 시 조기 반환)
+
+# 2026-04-26 - ASCII 시리얼 교정 모드 1차 버전
+
+## 개요
+Modbus RTU를 홀딩하고 ASCII 시리얼 통신 기반의 가스 교정 기능을 1차 버전으로 구현
+
+## 동작 방식
+
+### Monitor 모드 (기본)
+- 부팅 후 1초 주기로 측정값 출력
+- 출력 형식: `CO:xx.xppm ADC:xxxxx ZERO:xxxxx SPAN:xxxxx TEMP:xx.xC`
+- 교정 미완료 시 CO 자리에 `----` 표시
+
+### Calibrate 모드 (S 명령 진입)
+- `S` 입력: Monitor 중지, 교정 커맨드 대기
+- `C` 입력: Monitor 모드 복귀
+
+### 교정 커맨드
+| 커맨드 | 설명 | 조건 |
+|---|---|---|
+| `FZERO` | Factory Zero 교정 — 현재 ADC → fzero/zero 저장 | 없음 |
+| `FSPAN:<ppm>` | Factory Span 교정 — 현재 ADC + 농도 저장 | FZERO 완료 후 |
+| `ZERO` | User Zero 교정 | FZERO 완료 후 |
+| `SPAN:<ppm>` | User Span 교정 | FSPAN 완료 후 |
+| `RECAL` | User cal을 Factory cal로 복원 | FZERO+FSPAN 완료 후 |
+
+### 농도 계산식
+```
+CO(ppm) = (VOUT_ADC - ZERO_ADC) / (SPAN_ADC - ZERO_ADC) × SPAN_PPM
+```
+- 결과값 클램프: 0 ~ 10000 ppm
+- ZERO_ADC == SPAN_ADC 예외 처리 (0 반환)
+- 교정 미완료 시 -1.0f 반환 → 출력은 `----`
+
+## FRAM 구조 확장 (REV 0.3)
+
+### 변경 전 (16 bytes)
+```
+zero_raw / span_raw / span_ppm_x10 / cal_flags(bit0=ZERO, bit1=SPAN)
+```
+
+### 변경 후 (22 bytes)
+```
+fzero_raw / fspan_raw / fspan_ppm_x10   ← Factory cal
+zero_raw  / span_raw  / span_ppm_x10    ← User cal
+cal_flags: bit0=FZERO / bit1=FSPAN / bit2=ZERO / bit3=SPAN
+```
+
+- FZERO 실행: fzero_raw + zero_raw 동시 저장 (초기에는 Factory = User)
+- RECAL 실행: zero/span ← fzero/fspan 복원
+
+## Modbus RTU 처리
+- `modbus_rtu.c / modbus_rtu.h` 코드 보존
+- `uart.c` ISR에서 `ModbusRTU_OnRxByte()` 호출 비활성화 (주석 처리)
+- `main.c`에서 `ModbusRTU_Poll()` 호출 제거
+
+## 수정 파일
+- `fram.h` (구조체 확장, 신규 API 선언)
+- `fram.c` (Factory/User cal setter, RECAL 구현)
+- `uart.h` (UART_GetCommand / UART_FlushCmdBuf 추가)
+- `uart.c` (ISR에 ASCII 커맨드 라인 버퍼 추가, Modbus 호출 비활성화)
+- `main.c` (ASCII 시리얼 모드 완전 재작성)
