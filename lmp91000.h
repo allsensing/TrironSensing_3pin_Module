@@ -23,9 +23,19 @@
 #define LMP_REG_MODECN  0x12u
 
 /* ---- 레지스터 설정값 ---- */
-#define LMP_TIACN_VAL   0x0Cu  /* TIA_GAIN=7kΩ [6:4]=011 / RLOAD=10Ω [3:2]=00 */
+#define LMP_TIACN_VAL   0x0Cu  /* TIA_GAIN=7kΩ bits[4:2]=011 / RLOAD=10Ω bits[1:0]=00 */
 #define LMP_REFCN_VAL   0xB0u  /* Ext VREF [4]=1 / ZERO=50% [6:5]=01 / BIAS=0% [3:0]=0 / Positive [7]=1 */
 #define LMP_MODECN_VAL  0x03u  /* 3-electrode Amperometric [2:0]=011 */
+
+/* ---- TIA GAIN 인덱스 (GAIN:<n> 커맨드용) ----
+ *  TIACN bits[4:2] = TIA_GAIN, bits[1:0] = RLOAD(유지)
+ *  인덱스:  1     2     3     4     5     6      7
+ *  저항:  2.75k  3.5k   7k   14k   35k  120k  350k  (kΩ)
+ * ------------------------------------------------- */
+#define LMP_GAIN_IDX_MIN    1u
+#define LMP_GAIN_IDX_MAX    7u
+#define LMP_TIACN_GAIN_SHIFT  2u              /* TIA_GAIN 비트 위치 */
+#define LMP_TIACN_RLOAD_MASK  0x03u           /* RLOAD 비트 마스크 (유지용) */
 
 /* ---- 반환 코드 (FRAM_OK=0, TMP112_OK=0과 동일 규약) ---- */
 #define LMP_OK   0u   /* 성공 */
@@ -50,6 +60,7 @@ unsigned char LMP_Read (unsigned char reg, unsigned char *data);
 unsigned char LMP_Init(void);           /* 가스 측정용 Amperometric 초기화 */
 unsigned char LMP_Verify(void);         /* 레지스터 readback 검증 */
 unsigned char LMP_SetMode(unsigned char mode); /* OP_MODE 변경 */
+unsigned char LMP_SetTIACN(unsigned char tiacn_val); /* Unlock→TIACN쓰기→Lock+검증 */
 
 float         LMP_CalcTemp(float vs, float vs_ref);  /* 온도 계산 */
 

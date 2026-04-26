@@ -1,5 +1,10 @@
 /* ============================================================
  * ads1115.c - ADS1115 16-bit ADC driver
+ *
+ * Rev History
+ * -----------
+ * REV 0.2  2026-04-26  ADS_IsConversionReady() OS bit 폴링 추가
+ *                      (간헐적 0x7FEC 이상값 수정)
  * ============================================================ */
 
 #include <msp430.h>
@@ -94,6 +99,38 @@ unsigned char ADS_ReadConversionRaw(int *raw)
     UCB0IFG &= ~(UCTXIFG0 | UCRXIFG0 | UCNACKIFG);
     *raw = result;
     return ADS_OK;
+}
+
+/* ============================================================
+ *  OS bit 폴링: 변환 완료 여부 확인
+ *  Config 레지스터 MSB bit15(OS) = 1 이면 변환 완료
+ * ============================================================ */
+unsigned char ADS_IsConversionReady(void)
+{
+    unsigned char cfg_hi, cfg_lo;
+
+    if (ADS_SetPointer(ADS_REG_CFG) != ADS_OK) {
+        return 0u;
+    }
+
+    UCB0IFG &= ~(UCTXIFG0 | UCRXIFG0 | UCNACKIFG);
+    UCB0CTLW0 &= ~UCTR;
+    UCB0CTLW0 |= UCTXSTT;
+
+    if (!I2C_WaitFlag(&UCB0CTLW0, UCTXSTT, 0)) { I2C_BusReset(); return 0u; }
+    if (!I2C_WaitFlag(&UCB0IFG, UCRXIFG0, 1))  { I2C_BusReset(); return 0u; }
+    cfg_hi = UCB0RXBUF;
+
+    UCB0CTLW0 |= UCTXSTP;
+    if (!I2C_WaitFlag(&UCB0IFG, UCRXIFG0, 1))  { I2C_BusReset(); return 0u; }
+    cfg_lo = UCB0RXBUF;
+    (void)cfg_lo;   /* 사용 안 함, NACK 방지용 읽기 */
+
+    if (!I2C_WaitFlag(&UCB0CTLW0, UCTXSTP, 0)) { I2C_BusReset(); return 0u; }
+
+    UCB0IFG &= ~(UCTXIFG0 | UCRXIFG0 | UCNACKIFG);
+
+    return (cfg_hi & 0x80u) ? 1u : 0u;  /* OS=1: 변환 완료 */
 }
 
 void ADS_Init(void)

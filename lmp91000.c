@@ -195,6 +195,34 @@ unsigned char LMP_SetMode(unsigned char mode)
 }
 
 /* ============================================================
+ *  LMP_SetTIACN - TIACN 레지스터 쓰기 (Unlock → 쓰기 → Lock → 검증)
+ *  호출 전 LMP_SEL() 필요, 반환 후 ALL_DESEL() 호출
+ *  반환: LMP_OK=성공, LMP_ERR=실패
+ * ============================================================ */
+unsigned char LMP_SetTIACN(unsigned char tiacn_val)
+{
+    unsigned char rb = 0u, retry;
+
+    /* Unlock */
+    if (!LMP_Write(LMP_REG_LOCK, 0x00u)) { return LMP_ERR; }
+    __delay_cycles(8000);
+
+    /* TIACN 쓰기 + readback 검증, 최대 3회 재시도 */
+    for (retry = 0u; retry < 3u; retry++) {
+        if (!LMP_Write(LMP_REG_TIACN, tiacn_val)) { continue; }
+        __delay_cycles(8000);
+        if (LMP_Read(LMP_REG_TIACN, &rb) && (rb == tiacn_val)) { break; }
+        rb = 0u;
+    }
+
+    /* Lock */
+    LMP_Write(LMP_REG_LOCK, 0x01u);
+    __delay_cycles(8000);
+
+    return (rb == tiacn_val) ? LMP_OK : LMP_ERR;
+}
+
+/* ============================================================
  *  LMP_CalcTemp - 온도 계산
  *  vs     : 현재 VS 전압 (VOUT - VZERO) [V]
  *  vs_ref : 25°C 기준 VS 전압 (캘리브레이션값) [V]

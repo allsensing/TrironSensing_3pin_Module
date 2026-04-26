@@ -23,6 +23,7 @@
  *
  * Rev History
  * -----------
+ * REV 0.3  2026-04-26  ADS1115 OS bit 폴링으로 간헐적 이상값(0x7FEC) 수정
  * REV 0.2  2026-04-26  ASCII 시리얼 교정 모드 1차 버전
  * REV 0.1  2026-04-24  Modbus RTU 슬레이브 초기 버전
  * ============================================================ */
@@ -44,9 +45,12 @@
  * ============================================================ */
 #define SCHED_TICK_COUNTS           4u
 #define SENSOR_SAMPLE_PERIOD_TICKS  1024u   /* 1024Hz 기준 1초 */
-#define ADS_CONVERSION_WAIT_TICKS   10u     /* ~10ms            */
+#define ADS_CONVERSION_WAIT_TICKS   10u     /* 최소 대기 ~9.77ms (128SPS=7.81ms) */
+#define ADS_CONVERSION_TIMEOUT_TICKS 30u    /* 최대 대기 ~29ms  */
 #define ADS_MUX_VREF                4u
 #define ADS_MUX_VOUT                5u
+#define VOUT_AVG_N                  10u   /* 모니터 무빙 에버리지 윈도우 (10초) */
+#define CAL_AVG_N                   10u   /* 교정 평균 샘플 수 (10초)           */
 #define CAL_ADC_SETTLE_CYCLES       160000u /* ~20ms @8MHz      */
 #define SPAN_PPM_MAX                1000u
 
@@ -70,6 +74,7 @@ typedef enum {
 typedef struct {
     SensorState_t  state;
     unsigned long  deadline_ticks;
+    unsigned long  timeout_ticks;   /* WAIT 상태 하드 타임아웃 */
     int            rvref;
     int            rvout;
 } SensorTask_t;
@@ -89,10 +94,18 @@ static volatile unsigned long g_system_ticks = 0ul;
 static volatile uint16_t      g_tick_divider = 0u;
 static volatile uint8_t       g_sensor_due   = 1u;  /* 부팅 즉시 1회 측정 */
 static volatile uint8_t       g_print_due    = 0u;
+static          uint8_t       g_first_done   = 0u;  /* 첫 측정 완료 플래그 */
 
-static SensorTask_t g_sensor = { SENSOR_IDLE, 0ul, 0, 0 };
+static SensorTask_t g_sensor = { SENSOR_IDLE, 0ul, 0ul, 0, 0 };
 static SensorData_t g_meas   = { -1.0f, 0, 0, 0.0f, 0.0f };
 static SystemMode_t g_mode   = MODE_MONITOR;
+
+/* ── VOUT 무빙 에버리지 (모니터 모드 전용) ─────────────────── */
+static int16_t  g_vout_buf[VOUT_AVG_N];   /* 원형 버퍼            */
+static uint8_t  g_vout_buf_idx  = 0u;     /* 다음 쓰기 위치        */
+static int32_t  g_vout_sum      = 0L;     /* 합산 (빠른 평균 계산) */
+static int16_t  g_vout_avg      = 0;      /* 현재 평균값           */
+static uint8_t  g_vout_avg_init = 0u;     /* 첫 샘플 초기화 플래그 */
 
 /* ============================================================
  *  내부 유틸리티
@@ -143,6 +156,31 @@ static float Calc_CO_Ppm(int16_t vout_raw)
 }
 
 /* ============================================================
+ *  VOUT 무빙 에버리지 업데이트 (모니터 모드 전용)
+ *  첫 번째 샘플: 버퍼 전체를 동일 값으로 채워 즉시 유효한 평균 확보
+ *  이후: 원형 버퍼 + 합산 차감/추가로 shift 연산만으로 평균 계산
+ * ============================================================ */
+static void VoutAvg_Update(int16_t new_val)
+{
+    uint8_t i;
+
+    if (g_vout_avg_init == 0u) {
+        for (i = 0u; i < VOUT_AVG_N; i++) {
+            g_vout_buf[i] = new_val;
+        }
+        g_vout_sum      = (int32_t)new_val * (int32_t)VOUT_AVG_N;
+        g_vout_buf_idx  = 0u;
+        g_vout_avg_init = 1u;
+    } else {
+        g_vout_sum -= (int32_t)g_vout_buf[g_vout_buf_idx];
+        g_vout_buf[g_vout_buf_idx] = new_val;
+        g_vout_sum += (int32_t)new_val;
+        g_vout_buf_idx = (uint8_t)((g_vout_buf_idx + 1u) % (uint8_t)VOUT_AVG_N);
+    }
+    g_vout_avg = (int16_t)(g_vout_sum / (int32_t)VOUT_AVG_N);
+}
+
+/* ============================================================
  *  센서 State Machine
  * ============================================================ */
 static void SensorTask_Reset(void)
@@ -169,6 +207,7 @@ static void SensorTask_Run(unsigned long now_ticks)
         ADS_SEL();
         if (ADS_StartSingleShot(ADS_MUX_VREF, ADS_PGA_USE) == ADS_OK) {
             g_sensor.deadline_ticks = now_ticks + ADS_CONVERSION_WAIT_TICKS;
+            g_sensor.timeout_ticks  = now_ticks + ADS_CONVERSION_TIMEOUT_TICKS;
             g_sensor.state = SENSOR_ADS_REF_WAIT;
         } else {
             SensorTask_Reset();
@@ -176,7 +215,16 @@ static void SensorTask_Run(unsigned long now_ticks)
         break;
 
     case SENSOR_ADS_REF_WAIT:
+        if (TickReached(now_ticks, g_sensor.timeout_ticks)) {
+            SensorTask_Reset();   /* 타임아웃: ADS 응답 없음 */
+            break;
+        }
         if (TickReached(now_ticks, g_sensor.deadline_ticks)) {
+            if (!ADS_IsConversionReady()) {
+                /* OS=0: 변환 미완료 → 2틱 후 재확인 */
+                g_sensor.deadline_ticks = now_ticks + 2u;
+                break;
+            }
             if (ADS_ReadConversionRaw(&g_sensor.rvref) == ADS_OK) {
                 g_sensor.state = SENSOR_ADS_OUT_START;
             } else {
@@ -188,6 +236,7 @@ static void SensorTask_Run(unsigned long now_ticks)
     case SENSOR_ADS_OUT_START:
         if (ADS_StartSingleShot(ADS_MUX_VOUT, ADS_PGA_USE) == ADS_OK) {
             g_sensor.deadline_ticks = now_ticks + ADS_CONVERSION_WAIT_TICKS;
+            g_sensor.timeout_ticks  = now_ticks + ADS_CONVERSION_TIMEOUT_TICKS;
             g_sensor.state = SENSOR_ADS_OUT_WAIT;
         } else {
             SensorTask_Reset();
@@ -195,7 +244,16 @@ static void SensorTask_Run(unsigned long now_ticks)
         break;
 
     case SENSOR_ADS_OUT_WAIT:
+        if (TickReached(now_ticks, g_sensor.timeout_ticks)) {
+            SensorTask_Reset();   /* 타임아웃: ADS 응답 없음 */
+            break;
+        }
         if (TickReached(now_ticks, g_sensor.deadline_ticks)) {
+            if (!ADS_IsConversionReady()) {
+                /* OS=0: 변환 미완료 → 2틱 후 재확인 */
+                g_sensor.deadline_ticks = now_ticks + 2u;
+                break;
+            }
             if (ADS_ReadConversionRaw(&g_sensor.rvout) == ADS_OK) {
                 vref  = ADS_RawToVolt(g_sensor.rvref);
                 vout  = ADS_RawToVolt(g_sensor.rvout);
@@ -205,6 +263,7 @@ static void SensorTask_Run(unsigned long now_ticks)
                 g_meas.vout_raw = (int16_t)g_sensor.rvout;
                 g_meas.vs_mV    = (vout - vzero) * 1000.0f;
                 g_meas.co_ppm   = Calc_CO_Ppm(g_meas.vout_raw);
+                VoutAvg_Update(g_meas.vout_raw); /* 모니터 표시용 평균 업데이트 */
 
                 ALL_DESEL();
                 g_sensor.state = SENSOR_TMP_READ;
@@ -218,6 +277,10 @@ static void SensorTask_Run(unsigned long now_ticks)
         if (TMP112_ReadTemp(&temp_c) == TMP112_OK) {
             g_meas.temp_c = temp_c;
         }
+        if (g_first_done == 0u) {
+            g_first_done = 1u;
+            g_print_due  = 1u;  /* 첫 측정 완료 즉시 출력 (이후는 1초 타이머 사용) */
+        }
         SensorTask_Reset();
         break;
 
@@ -228,17 +291,46 @@ static void SensorTask_Run(unsigned long now_ticks)
 }
 
 /* ============================================================
- *  교정용 VOUT ADC 블로킹 읽기
+ *  교정용 VOUT ADC 8초 평균 읽기
+ *  1초 간격으로 CAL_AVG_N(10)회 측정 → 평균 반환
+ *  진행 표시: "1 2 3 4 5 6 7 8"
+ *
+ *  - 센서 스테이트 머신 정지 후 I2C 직접 점유
+ *  - 타이머 틱(1024Hz) 기반 1초 대기 → 정확한 간격 보장
  * ============================================================ */
-static int Cal_ReadVoutADC(void)
+static int Cal_ReadVoutADC_Avg(void)
 {
-    int raw = 0;
-    SensorTask_Reset();
-    __delay_cycles(CAL_ADC_SETTLE_CYCLES);
-    ADS_SEL();
-    ADS_ReadChPGA_Raw(ADS_MUX_VOUT, ADS_PGA_USE, &raw);
-    ALL_DESEL();
-    return raw;
+    int32_t       sum     = 0L;
+    int           raw     = 0;
+    unsigned long t_start;
+    uint8_t       i;
+
+    SensorTask_Reset();   /* 센서 스테이트 머신 정지 */
+
+    for (i = 1u; i <= (uint8_t)CAL_AVG_N; i++) {
+        /* 1초 대기 (타이머 틱 기준) */
+        t_start = System_GetTicks();
+        while (!TickReached(System_GetTicks(),
+                            t_start + SENSOR_SAMPLE_PERIOD_TICKS)) {
+            /* 대기 중 커맨드 버퍼 플러시 (입력 무시) */
+        }
+
+        /* ADC 단일 변환 읽기 */
+        ADS_SEL();
+        ADS_ReadChPGA_Raw(ADS_MUX_VOUT, ADS_PGA_USE, &raw);
+        ALL_DESEL();
+
+        sum += (int32_t)raw;
+
+        /* 진행 카운트 표시 */
+        UART_SendUInt((unsigned int)i);
+        if (i < (uint8_t)CAL_AVG_N) {
+            UART_SendStr(" ");
+        }
+    }
+    UART_SendStr("\r\n");
+
+    return (int)(sum / (int32_t)CAL_AVG_N);
 }
 
 /* ============================================================
@@ -247,18 +339,19 @@ static int Cal_ReadVoutADC(void)
  * ============================================================ */
 static void PrintMonitorLine(void)
 {
-    const FRAM_Data_t *f = FRAM_GetData();
+    const FRAM_Data_t *f   = FRAM_GetData();
+    float              co  = Calc_CO_Ppm(g_vout_avg); /* 평균값으로 농도 계산 */
 
     UART_SendStr("CO:");
-    if (g_meas.co_ppm < 0.0f) {
+    if (co < 0.0f) {
         UART_SendStr("----");
     } else {
-        UART_SendFloat(g_meas.co_ppm, 1u);
+        UART_SendFloat(co, 1u);
     }
     UART_SendStr("ppm ");
 
     UART_SendStr("ADC:");
-    UART_SendInt(g_meas.vout_raw);
+    UART_SendInt(g_vout_avg);   /* 10샘플 이동 평균값 표시 */
     UART_SendStr(" ");
 
     UART_SendStr("ZERO:");
@@ -314,13 +407,45 @@ static unsigned int ParseUInt(const char *s)
 }
 
 /* ============================================================
+ *  GAIN 헬퍼 — PrintCalStatus/ProcessCommand 보다 먼저 정의
+ * ============================================================ */
+static const char *GainIdxToStr(unsigned int idx)
+{
+    switch (idx) {
+    case 1u: return "2.75k";
+    case 2u: return "3.5k";
+    case 3u: return "7k";
+    case 4u: return "14k";
+    case 5u: return "35k";
+    case 6u: return "120k";
+    case 7u: return "350k";
+    default: return "?";
+    }
+}
+
+static unsigned int TIACNToGainIdx(unsigned char tiacn)
+{
+    return (unsigned int)((tiacn >> LMP_TIACN_GAIN_SHIFT) & 0x07u);
+}
+
+/* ============================================================
  *  교정 상태 / 메뉴 출력
  * ============================================================ */
 static void PrintCalStatus(void)
 {
     const FRAM_Data_t *f = FRAM_GetData();
+    unsigned int gain_idx;
 
     UART_SendStr("[CAL STATUS]\r\n");
+
+    gain_idx = TIACNToGainIdx((unsigned char)f->tiacn_val);
+    UART_SendStr("  GAIN:  ");
+    UART_SendUInt(gain_idx);
+    UART_SendStr(" (");
+    UART_SendStr(GainIdxToStr(gain_idx));
+    UART_SendStr("ohm)  TIACN=0x");
+    UART_SendHex8((unsigned char)f->tiacn_val);
+    UART_SendStr("\r\n");
 
     UART_SendStr("  FZERO: ");
     if (f->cal_flags & FRAM_CAL_FZERO_DONE) {
@@ -358,6 +483,7 @@ static void PrintCalStatus(void)
 static void PrintCalMenu(void)
 {
     UART_SendStr("[CAL] Commands:\r\n");
+    UART_SendStr("  GAIN:<1~7>    TIA gain (1=2.75k 2=3.5k 3=7k 4=14k 5=35k 6=120k 7=350k ohm)\r\n");
     UART_SendStr("  FZERO         Factory zero calibration\r\n");
     UART_SendStr("  FSPAN:<ppm>   Factory span calibration (1~1000 ppm)\r\n");
     UART_SendStr("  ZERO          User zero calibration\r\n");
@@ -398,14 +524,48 @@ static void ProcessCommand(char *cmd)
         return;
     }
 
+    /* GAIN:<n>: TIA 이득 설정 (1=2.75k ~ 7=350k ohm) */
+    if (StrStartsWith(cmd, "GAIN:")) {
+        unsigned int  gain_idx  = ParseUInt(cmd + 5u);
+        unsigned char new_tiacn;
+
+        if (gain_idx < (unsigned int)LMP_GAIN_IDX_MIN ||
+            gain_idx > (unsigned int)LMP_GAIN_IDX_MAX) {
+            UART_SendStr("[ERR] GAIN range: 1~7\r\n");
+            UART_SendStr("  1=2.75k  2=3.5k  3=7k  4=14k  5=35k  6=120k  7=350k (ohm)\r\n");
+            return;
+        }
+
+        /* RLOAD 비트 유지, GAIN 비트만 교체 */
+        new_tiacn = (unsigned char)((gain_idx << LMP_TIACN_GAIN_SHIFT) |
+                    ((unsigned char)FRAM_GetTIACN() & LMP_TIACN_RLOAD_MASK));
+
+        LMP_SEL();
+        if (LMP_SetTIACN(new_tiacn) == LMP_OK) {
+            FRAM_SetTIACN((uint16_t)new_tiacn);
+            UART_SendStr("[GAIN OK] ");
+            UART_SendUInt(gain_idx);
+            UART_SendStr(" (");
+            UART_SendStr(GainIdxToStr(gain_idx));
+            UART_SendStr("ohm)  TIACN=0x");
+            UART_SendHex8(new_tiacn);
+            UART_SendStr("\r\n");
+            UART_SendStr("[WARN] ZERO/SPAN cal may be invalid. Recalibrate recommended.\r\n");
+        } else {
+            UART_SendStr("[ERR] GAIN write failed\r\n");
+        }
+        ALL_DESEL();
+        return;
+    }
+
     /* FZERO: Factory Zero 교정 */
     if (strcmp(cmd, "FZERO") == 0) {
-        UART_SendStr("[FZERO] Reading ADC...\r\n");
-        adc_raw = Cal_ReadVoutADC();
+        UART_SendStr("[FZERO] 8sec avg: ");
+        adc_raw = Cal_ReadVoutADC_Avg();
         FRAM_SetFactoryZero((int16_t)adc_raw);
         g_meas.vout_raw = (int16_t)adc_raw;
         g_meas.co_ppm   = Calc_CO_Ppm(g_meas.vout_raw);
-        UART_SendStr("[FZERO OK] ADC=");
+        UART_SendStr("[FZERO OK] AVG=");
         UART_SendInt(adc_raw);
         UART_SendStr("\r\n");
         return;
@@ -423,11 +583,11 @@ static void ProcessCommand(char *cmd)
             UART_SendStr("[ERR] FZERO must be done first\r\n");
             return;
         }
-        UART_SendStr("[FSPAN] Reading ADC...\r\n");
-        adc_raw = Cal_ReadVoutADC();
+        UART_SendStr("[FSPAN] 8sec avg: ");
+        adc_raw = Cal_ReadVoutADC_Avg();
         FRAM_SetFactorySpan((int16_t)adc_raw, (uint16_t)(ppm * 10u));
         g_meas.co_ppm = Calc_CO_Ppm(g_meas.vout_raw);
-        UART_SendStr("[FSPAN OK] ADC=");
+        UART_SendStr("[FSPAN OK] AVG=");
         UART_SendInt(adc_raw);
         UART_SendStr("  PPM=");
         UART_SendUInt(ppm);
@@ -442,11 +602,11 @@ static void ProcessCommand(char *cmd)
             UART_SendStr("[ERR] FZERO must be done first\r\n");
             return;
         }
-        UART_SendStr("[ZERO] Reading ADC...\r\n");
-        adc_raw = Cal_ReadVoutADC();
+        UART_SendStr("[ZERO] 8sec avg: ");
+        adc_raw = Cal_ReadVoutADC_Avg();
         FRAM_SetUserZero((int16_t)adc_raw);
         g_meas.co_ppm = Calc_CO_Ppm(g_meas.vout_raw);
-        UART_SendStr("[ZERO OK] ADC=");
+        UART_SendStr("[ZERO OK] AVG=");
         UART_SendInt(adc_raw);
         UART_SendStr("\r\n");
         return;
@@ -464,11 +624,11 @@ static void ProcessCommand(char *cmd)
             UART_SendStr("[ERR] FSPAN must be done first\r\n");
             return;
         }
-        UART_SendStr("[SPAN] Reading ADC...\r\n");
-        adc_raw = Cal_ReadVoutADC();
+        UART_SendStr("[SPAN] 8sec avg: ");
+        adc_raw = Cal_ReadVoutADC_Avg();
         FRAM_SetUserSpan((int16_t)adc_raw, (uint16_t)(ppm * 10u));
         g_meas.co_ppm = Calc_CO_Ppm(g_meas.vout_raw);
-        UART_SendStr("[SPAN OK] ADC=");
+        UART_SendStr("[SPAN OK] AVG=");
         UART_SendInt(adc_raw);
         UART_SendStr("  PPM=");
         UART_SendUInt(ppm);
@@ -563,6 +723,12 @@ int main(void)
     tmp_st = TMP112_Init();
 
     PrintStartupBanner(fram_st, lmp_st, tmp_st);
+
+    /* Bug8 fix: 초기화 중 TB0R이 TB0CCR0(=4)를 이미 지나쳐 있어
+     * 다음 매치까지 최대 ~16초 대기하는 문제 수정.
+     * __enable_interrupt() 직전에 현재 TB0R 기준으로 CCR0 재설정. */
+    TB0CCTL0 &= ~CCIFG;
+    TB0CCR0   = (unsigned int)(TB0R + SCHED_TICK_COUNTS);
 
     __enable_interrupt();
 

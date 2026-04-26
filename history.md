@@ -1,3 +1,108 @@
+# 2026-04-26 - GAIN 커맨드 추가 (TIA 이득 시리얼 설정 + FRAM 저장)
+
+## 추가 기능
+`S` 진입 후 교정 모드에서 `GAIN:<1~7>` 커맨드로 LMP91000 TIA 이득 변경 가능
+
+| 인덱스 | 저항값 | TIACN[4:2] |
+|--------|--------|-----------|
+| 1 | 2.75 kΩ | 001 |
+| 2 | 3.5 kΩ  | 010 |
+| 3 | **7 kΩ** (기본) | 011 |
+| 4 | 14 kΩ  | 100 |
+| 5 | 35 kΩ  | 101 |
+| 6 | 120 kΩ | 110 |
+| 7 | 350 kΩ | 111 |
+
+## 동작
+- RLOAD 비트(bits[1:0]) 유지, GAIN 비트(bits[4:2])만 교체
+- LMP91000 Unlock → TIACN 쓰기 → Lock → readback 검증 (최대 3회 재시도)
+- 성공 시 `FRAM_SetTIACN()` 으로 FRAM 저장 (재부팅 후 `LMP_Init`에서 복원됨)
+- GAIN 변경 후 ZERO/SPAN 재교정 권고 경고 출력
+
+## 수정 파일
+- `lmp91000.h` — GAIN 상수(LMP_GAIN_IDX_MIN/MAX, LMP_TIACN_GAIN_SHIFT/RLOAD_MASK) 추가, `LMP_SetTIACN()` 선언
+- `lmp91000.c` — `LMP_SetTIACN()` 구현
+- `main.c` — `GainIdxToStr()`, `TIACNToGainIdx()` 헬퍼, `PrintCalStatus()`에 GAIN 표시, `PrintCalMenu()`에 GAIN 항목, `ProcessCommand()`에 `GAIN:<n>` 처리 추가
+
+---
+
+# 2026-04-26 - Bug8: 부팅 후 첫 출력까지 ~15초 지연 수정
+
+## 증상
+- PrintStartupBanner 표시 후 약 15초간 침묵
+- 이후 1초 간격 모니터 출력은 정상 동작
+
+## 원인 분석
+Timer B0 CONTINUOUS 모드에서 `TB0CCR0 = TB0R + 4 = 4` 로 고정된 상태에서
+`__enable_interrupt()` 호출 전까지 모든 초기화(~300ms)가 인터럽트 없이 진행됨.
+
+이 시간 동안 TB0R은 계속 카운트하여 CCR0(=4)를 이미 지나친 상태.
+다음 CCR0 매치는 TB0R이 65535 → 0 → 4 로 한 바퀴 돌아와야 발생:
+
+```
+남은 카운트 ≈ (65535 - 1200 + 4) = 64339
+대기 시간  = 64339 / 4096Hz ≈ 15.7초
+```
+
+첫 ISR 이후로는 `TB0CCR0 += 4` 정상 동작 → 1초 주기 유지.
+
+## 수정 내용 (`main.c` REV 0.4)
+`__enable_interrupt()` 직전에 CCR0를 현재 TB0R 기준으로 재설정:
+```c
+TB0CCTL0 &= ~CCIFG;
+TB0CCR0   = (unsigned int)(TB0R + SCHED_TICK_COUNTS);
+__enable_interrupt();
+```
+
+## 추가 수정
+- `SENSOR_TMP_READ`에서 첫 측정 완료 즉시 `g_print_due=1` 세팅 (g_first_done 플래그)
+  → 배너 표시 후 ~25ms 이내 첫 모니터 라인 출력 가능
+
+## 수정 파일
+- `main.c`
+
+---
+
+# 2026-04-26 - ADS1115 간헐적 이상값(0x7FEC) 수정 — OS bit 폴링
+
+## 증상
+- 정상값 ~16215 중에서 ~3-5초 간격으로 32748(0x7FEC)이 출력
+- 0x7FEC = ADS1115 풀스케일(0x7FFF)보다 19카운트 낮은 값
+- 교정 후 CO 농도 계산에 직접 영향을 주는 심각한 버그
+
+## 원인 분석
+- ADS1115 128SPS 단일변환 시간: **7.81 ms**
+- 기존 `ADS_CONVERSION_WAIT_TICKS = 10` → 9.77 ms 대기
+- `StartSingleShot()` I2C 전송 시간 ~1–2 ms 소요
+- 실제 변환 완료 전에 읽기가 시작되는 타이밍 레이스 발생
+- ADS1115는 단일변환 미완료 시 이전 변환 결과(또는 풀스케일)를 반환함
+
+## 수정 내용
+### `ads1115.c` / `ads1115.h` (REV 0.2)
+- `ADS_IsConversionReady()` 추가
+  - Config 레지스터 bit15(OS bit) 폴링
+  - OS=1이면 변환 완료, OS=0이면 변환 진행 중
+
+### `main.c` (REV 0.3)
+- `ADS_CONVERSION_TIMEOUT_TICKS = 30u` 상수 추가 (~29 ms 하드 타임아웃)
+- `SensorTask_t`에 `timeout_ticks` 필드 추가
+- `SENSOR_ADS_REF_WAIT` / `SENSOR_ADS_OUT_WAIT` 로직 변경:
+  1. 최소 10틱 대기 (기존과 동일)
+  2. `ADS_IsConversionReady()` 확인
+  3. OS=0이면 2틱 후 재확인 (최대 29 ms까지 반복)
+  4. 29 ms 초과 시 `SensorTask_Reset()` (타임아웃 안전망)
+
+## 결과
+- ADS1115가 변환 완료를 신호할 때만 결과를 읽음
+- 타이밍 여유와 무관하게 이상값 원천 차단
+
+## 수정 파일
+- `ads1115.h`
+- `ads1115.c`
+- `main.c`
+
+---
+
 # 2026-04-24 10:50 KST - ADS1115/TMP112 I2C 오류 처리 및 실제 시간 로깅 반영
 
 ## 요약

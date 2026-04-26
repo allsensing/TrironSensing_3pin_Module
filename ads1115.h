@@ -38,6 +38,7 @@ unsigned char ADS_ReadChPGA_Raw(unsigned char mux, unsigned char pga, int *raw);
 unsigned char ADS_StartSingleShot(unsigned char mux, unsigned char pga);
 unsigned char ADS_SetPointer(unsigned char reg);
 unsigned char ADS_ReadConversionRaw(int *raw);
+unsigned char ADS_IsConversionReady(void);   /* OS bit polling: 1=ready, 0=busy */
 
 static inline float ADS_RawToVolt(int raw)
 {
